@@ -26,7 +26,7 @@ Tests never hit the network. Handlers get `SimpleNamespace`/`AsyncMock` fakes fo
 
 ## CI/CD and deployment
 
-`.github/workflows/ci-cd.yml` runs `test` on pushes to `main` and on PRs. On `main` (push or manual run) it then runs `build`, which pushes `ghcr.io/idachser/speech_recognition:latest` and `:<sha>` to GHCR, and then `deploy`. `deploy` copies `compose.yaml` to `~/speech_recognition` on the VPS over SSH and runs `docker compose pull && up -d`, logging into GHCR with the job's short-lived `GITHUB_TOKEN`. The SSH settings come from repository secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS` and optional `VPS_PORT`, used in the `production` environment.
+`.github/workflows/ci-cd.yml` runs `test` on pushes to `main` and on PRs. On `main` (push or manual run) it then runs `build`, which pushes `ghcr.io/idachser/speech_recognition:latest` and `:<sha>` to GHCR, and then `deploy`. `deploy` copies `compose.yaml` to `~/www/speech_recognition` on the VPS (`DEPLOY_DIR` in the workflow, the same directory that holds the old systemd checkout and its dotenv file) over SSH and runs `docker compose pull && up -d`, logging into GHCR with the job's short-lived `GITHUB_TOKEN`. The SSH settings come from repository secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS` and optional `VPS_PORT`, used in the `production` environment.
 
 - The image copies only `bot.py` and `requirements.txt` (`.dockerignore` whitelist). A new runtime file must be added to both `Dockerfile` and `.dockerignore`.
 - The container's working directory is the `/data` volume, so `bot_data.pickle` and `enotebot.log` (both written relative to cwd) survive redeploys.

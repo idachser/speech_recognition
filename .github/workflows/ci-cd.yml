@@ -58,7 +58,7 @@ jobs:
       contents: read
       packages: read
     env:
-      DEPLOY_DIR: speech_recognition
+      DEPLOY_DIR: www/speech_recognition
       SSH_TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
       SSH_PORT: ${{ secrets.VPS_PORT || '22' }}
     steps:

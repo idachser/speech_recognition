@@ -12,7 +12,7 @@ Every push to `main` runs the tests, builds a Docker image, pushes it to `ghcr.i
 ### One-time server setup
 
 1. Install Docker with the Compose plugin and make sure the deploy user can run `docker`.
-2. Create `~/speech_recognition/` and put the dotenv file with `TELEGRAM_API_TOKEN` and `ASSEMBLYAI_API_KEY` in it. The workflow uploads `compose.yaml` there on every deploy.
+2. Create `~/www/speech_recognition/` and put the dotenv file with `TELEGRAM_API_TOKEN` and `ASSEMBLYAI_API_KEY` in it. The workflow uploads `compose.yaml` there on every deploy.
 3. Add the deploy public key to `~/.ssh/authorized_keys` of the deploy user.
 
 ### GitHub secrets
