@@ -3,3 +3,6 @@ venv/
 *.oga
 *.wav
 enotebot.log
+bot_data.pickle
+__pycache__/
+.pytest_cache/
