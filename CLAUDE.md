@@ -22,7 +22,16 @@ pytest                                                  # all tests
 pytest tests/test_handlers.py::test_voice_empty_text    # single test
 ```
 
-Tests never hit the network. Handlers get `SimpleNamespace`/`AsyncMock` fakes for Telegram objects (helpers in `tests/conftest.py`), and `bot.transcribe` / `bot.translate_existing` / `aai.Transcriber` / `aai.LLMGateway` are monkeypatched. There is no linter or build step.
+Tests never hit the network. Handlers get `SimpleNamespace`/`AsyncMock` fakes for Telegram objects (helpers in `tests/conftest.py`), and `bot.transcribe` / `bot.translate_existing` / `aai.Transcriber` / `aai.LLMGateway` are monkeypatched. There is no linter.
+
+## CI/CD and deployment
+
+`.github/workflows/ci-cd.yml` runs `test` on pushes to `main` and on PRs. On `main` (push or manual run) it then runs `build`, which pushes `ghcr.io/idachser/speech_recognition:latest` and `:<sha>` to GHCR, and then `deploy`. `deploy` copies `compose.yaml` to `~/speech_recognition` on the VPS over SSH and runs `docker compose pull && up -d`, logging into GHCR with the job's short-lived `GITHUB_TOKEN`. The SSH settings come from repository secrets `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_KNOWN_HOSTS` and optional `VPS_PORT`, used in the `production` environment.
+
+- The image copies only `bot.py` and `requirements.txt` (`.dockerignore` whitelist). A new runtime file must be added to both `Dockerfile` and `.dockerignore`.
+- The container's working directory is the `/data` volume, so `bot_data.pickle` and `enotebot.log` (both written relative to cwd) survive redeploys.
+- The server's `.env` sits next to `compose.yaml` and reaches the container through `env_file`. It is never in the image or the repo.
+- Only one instance may poll a bot token at a time. Two running copies (for example the old systemd service plus the container) cause Telegram `Conflict` errors.
 
 Configuration comes from a `.env` file (gitignored) loaded by `python-dotenv`. It needs `TELEGRAM_API_TOKEN` and `ASSEMBLYAI_API_KEY`.
 
