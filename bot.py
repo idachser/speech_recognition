@@ -217,7 +217,9 @@ def main() -> None:
         )
     )
 
-    app.run_polling()
+    # Without retries a startup TimedOut kills the process, and the container
+    # restart loop then hammers getMe until Telegram answers with RetryAfter.
+    app.run_polling(bootstrap_retries=-1)
 
 
 if __name__ == "__main__":
