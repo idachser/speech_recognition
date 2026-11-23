@@ -227,6 +227,8 @@ if __name__ == "__main__":
         filename="enotebot.log",
         filemode="w",
     )
+    # httpx logs every request URL at INFO, and Telegram URLs contain the bot token.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     load_dotenv()
     aai.settings.api_key = os.environ.get("ASSEMBLYAI_API_KEY")
     telegram_token = os.environ.get("TELEGRAM_API_TOKEN")
