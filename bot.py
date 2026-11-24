@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 
@@ -12,7 +13,7 @@ from telegram import (
     Update,
     User,
 )
-from telegram.constants import MessageLimit
+from telegram.constants import ChatAction, MessageLimit
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -33,6 +34,8 @@ logger = logging.getLogger(__name__)
 MAX_LEN = MessageLimit.MAX_TEXT_LENGTH
 
 MODES = ("off", "system", "custom")
+# Telegram shows a chat action for about 5 seconds, so it has to be repeated.
+TYPING_INTERVAL = 4
 SETTINGS_BUTTONS = {t(code, "settings_button") for code in TEXTS}
 
 
@@ -246,16 +249,37 @@ async def handle_text(update: Update, context: CallbackContext) -> None:
     await message.reply_text(tr(user, "hint"), reply_markup=reply_keyboard(user))
 
 
+@contextlib.asynccontextmanager
+async def typing_action(bot, chat_id: int, interval: float = TYPING_INTERVAL):
+    async def keep_typing() -> None:
+        while True:
+            # The indicator is cosmetic: a failed chat action must never break the reply.
+            try:
+                await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            except Exception as e:
+                logger.debug(f"Could not send chat action: {e}")
+            await asyncio.sleep(interval)
+
+    task = asyncio.create_task(keep_typing())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 async def handle_voice(update: Update, context: CallbackContext) -> None:
     message = update.message
     user = update.effective_user
     try:
         media = message.voice or message.audio
-        new_file = await context.bot.get_file(media.file_id)
-
         target = translation_target(user, context)
         lang = target or target_language(user)
-        transcript = await asyncio.to_thread(transcribe, new_file.file_path, target)
+
+        async with typing_action(context.bot, message.chat_id):
+            new_file = await context.bot.get_file(media.file_id)
+            transcript = await asyncio.to_thread(transcribe, new_file.file_path, target)
 
         if not transcript.text:
             await message.reply_text(tr(user, "no_speech"))
@@ -302,7 +326,8 @@ async def handle_translate(update: Update, context: CallbackContext) -> None:
     lang = lang or target_language(user)
 
     try:
-        translation = await asyncio.to_thread(translate_existing, transcript_id, lang)
+        async with typing_action(context.bot, query.message.chat_id):
+            translation = await asyncio.to_thread(translate_existing, transcript_id, lang)
     except Exception as e:
         logger.error(f"Translation failed: {e}")
         translation = None

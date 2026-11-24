@@ -14,6 +14,7 @@ def make_user(language_code="ru"):
 
 def make_message(text=None, reply_markup=None):
     return SimpleNamespace(
+        chat_id=42,
         text=text,
         reply_markup=reply_markup,
         voice=SimpleNamespace(file_id="voice-id"),
@@ -39,6 +40,7 @@ def make_transcript(
 @pytest.fixture
 def context():
     bot = SimpleNamespace(
-        get_file=AsyncMock(return_value=SimpleNamespace(file_path="https://file"))
+        get_file=AsyncMock(return_value=SimpleNamespace(file_path="https://file")),
+        send_chat_action=AsyncMock(),
     )
     return SimpleNamespace(user_data={}, bot=bot)
