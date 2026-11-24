@@ -60,22 +60,22 @@ async def test_settings_shows_current_choice(context):
 
     call = update.message.reply_text.await_args
     assert "(en)" in call.args[0]
-    assert call.kwargs["reply_markup"] == bot.settings_keyboard(True)
+    assert call.kwargs["reply_markup"] == bot.settings_keyboard(make_user("en"), True)
 
 
 async def test_handle_settings_saves_choice_and_updates_keyboard(context):
-    update = callback_update("settings:on", make_message(reply_markup=bot.settings_keyboard(False)))
+    update = callback_update("settings:on", make_message(reply_markup=bot.settings_keyboard(make_user(), False)))
     await bot.handle_settings(update, context)
 
     query = update.callback_query
     assert context.user_data["translate"] is True
     query.answer.assert_awaited_once_with("Перевод включён")
-    assert query.edit_message_text.await_args.kwargs["reply_markup"] == bot.settings_keyboard(True)
+    assert query.edit_message_text.await_args.kwargs["reply_markup"] == bot.settings_keyboard(make_user(), True)
 
 
 async def test_handle_settings_skips_edit_when_unchanged(context):
     context.user_data["translate"] = False
-    update = callback_update("settings:off", make_message(reply_markup=bot.settings_keyboard(False)))
+    update = callback_update("settings:off", make_message(reply_markup=bot.settings_keyboard(make_user(), False)))
     await bot.handle_settings(update, context)
 
     assert context.user_data["translate"] is False
@@ -122,7 +122,7 @@ async def test_voice_with_translation_on_replies_with_both(context, transcribe_r
     await bot.handle_voice(update, context)
 
     assert calls == [("https://file", "ru")]
-    assert sent(update) == (bot.with_translation("hello", "привет", "ru"), None)
+    assert sent(update) == ("hello\n\n🌐 Перевод (ru):\nпривет", None)
 
 
 async def test_voice_translation_missing_falls_back_to_button(context, transcribe_returns):
@@ -188,7 +188,7 @@ async def test_translate_button_edits_message(context, monkeypatch):
     query = update.callback_query
     assert calls == [("abc", "ru")]
     query.answer.assert_awaited_once_with()
-    query.edit_message_text.assert_awaited_once_with(bot.with_translation("hello", "привет", "ru"))
+    query.edit_message_text.assert_awaited_once_with("hello\n\n🌐 Перевод (ru):\nпривет")
 
 
 @pytest.mark.parametrize("outcome", [None, RuntimeError("boom")])
@@ -218,3 +218,45 @@ async def test_translate_button_long_text_replies_separately(context, monkeypatc
     query.edit_message_reply_markup.assert_awaited_once_with(reply_markup=None)
     query.edit_message_text.assert_not_awaited()
     assert message.reply_text.await_args.args[0] == f"🌐 Перевод (ru):\n{translation}"
+
+
+async def test_start_in_english(context):
+    update = voice_update("en")
+    await bot.start(update, context)
+    assert update.message.reply_text.await_args.args[0].startswith("Hi, Alex!")
+
+
+async def test_unknown_language_falls_back_to_english(context, transcribe_returns):
+    transcribe_returns(make_transcript(text="hallo", language_code="en"))
+    update = voice_update("ja")
+    await bot.handle_voice(update, context)
+
+    _, markup = sent(update)
+    assert markup.inline_keyboard[0][0].text == "Translate"
+
+
+async def test_error_message_in_users_language(context, transcribe_returns):
+    transcribe_returns(error=RuntimeError("boom"))
+    update = voice_update("uk")
+    await bot.handle_voice(update, context)
+
+    assert sent(update) == ("Не вдалося розпізнати, спробуй ще раз.", None)
+
+
+async def test_translate_button_header_in_users_language(context, monkeypatch):
+    monkeypatch.setattr(bot, "translate_existing", lambda transcript_id, lang: "hello")
+    update = callback_update("tr:abc", make_message(text="привет"), language_code="en")
+    await bot.handle_translate(update, context)
+
+    update.callback_query.edit_message_text.assert_awaited_once_with(
+        "привет\n\n🌐 Translation (en):\nhello"
+    )
+
+
+async def test_missing_language_code_defaults_to_english(context, transcribe_returns):
+    transcribe_returns(make_transcript(text="привет", language_code="ru"))
+    update = voice_update(None)
+    await bot.handle_voice(update, context)
+
+    _, markup = sent(update)
+    assert markup.inline_keyboard[0][0].text == "Translate"

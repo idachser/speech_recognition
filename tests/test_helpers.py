@@ -10,7 +10,7 @@ from conftest import make_message, make_user
 
 @pytest.mark.parametrize(
     "code, expected",
-    [("en", "en"), ("en_us", "en"), ("pt-BR", "pt"), ("UK", "uk"), (None, "ru"), ("", "ru")],
+    [("en", "en"), ("en_us", "en"), ("pt-BR", "pt"), ("UK", "uk"), (None, "en"), ("", "en")],
 )
 def test_base_language(code, expected):
     assert bot.base_language(code) == expected
@@ -18,7 +18,7 @@ def test_base_language(code, expected):
 
 def test_target_language_uses_telegram_language():
     assert bot.target_language(make_user("de")) == "de"
-    assert bot.target_language(make_user(None)) == "ru"
+    assert bot.target_language(make_user(None)) == "en"
 
 
 def test_translate_enabled_defaults_to_false():
@@ -27,7 +27,13 @@ def test_translate_enabled_defaults_to_false():
 
 
 def test_with_translation_format():
-    assert bot.with_translation("hi", "привет", "ru") == "hi\n\n🌐 Перевод (ru):\nпривет"
+    block = bot.translation_block(make_user("ru"), "привет", "ru")
+    assert block == "🌐 Перевод (ru):\nпривет"
+    assert bot.with_translation("hi", block) == "hi\n\n🌐 Перевод (ru):\nпривет"
+
+
+def test_translation_header_follows_ui_language():
+    assert bot.translation_block(make_user("en"), "hi", "en") == "🌐 Translation (en):\nhi"
 
 
 def test_chunks_respects_telegram_limit():
@@ -48,12 +54,15 @@ async def test_reply_long_puts_markup_on_last_part_only():
 
 
 def test_settings_keyboard_marks_current_choice():
-    on, off = bot.settings_keyboard(True).inline_keyboard[0]
+    on, off = bot.settings_keyboard(make_user("ru"), True).inline_keyboard[0]
     assert (on.text, off.text) == ("✅ Переводить", "Не переводить")
     assert (on.callback_data, off.callback_data) == ("settings:on", "settings:off")
 
-    on, off = bot.settings_keyboard(False).inline_keyboard[0]
+    on, off = bot.settings_keyboard(make_user("ru"), False).inline_keyboard[0]
     assert (on.text, off.text) == ("Переводить", "✅ Не переводить")
+
+    on, off = bot.settings_keyboard(make_user("en"), True).inline_keyboard[0]
+    assert (on.text, off.text) == ("✅ Translate", "Don't translate")
 
 
 class FakeTranscriber:
