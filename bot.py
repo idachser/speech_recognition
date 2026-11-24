@@ -4,7 +4,14 @@ import os
 
 import assemblyai as aai
 from dotenv import load_dotenv
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update, User
+from telegram import (
+    BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    Update,
+    User,
+)
 from telegram.constants import MessageLimit
 from telegram.error import TelegramError
 from telegram.ext import (
@@ -18,11 +25,15 @@ from telegram.ext import (
 )
 
 from i18n import TEXTS, base_language, t
+from languages import language_name, resolve_language
 
 
 logger = logging.getLogger(__name__)
 
 MAX_LEN = MessageLimit.MAX_TEXT_LENGTH
+
+MODES = ("off", "system", "custom")
+SETTINGS_BUTTONS = {t(code, "settings_button") for code in TEXTS}
 
 
 def tr(user: User, key: str, **kwargs) -> str:
@@ -33,12 +44,25 @@ def target_language(user: User) -> str:
     return base_language(user.language_code)
 
 
-def translate_enabled(context: CallbackContext) -> bool:
-    return context.user_data.get("translate", False)
+def translation_mode(context: CallbackContext) -> str:
+    mode = context.user_data.get("translate_mode")
+    if mode in MODES:
+        return mode
+    return "system" if context.user_data.get("translate") else "off"
+
+
+def translation_target(user: User, context: CallbackContext) -> str | None:
+    mode = translation_mode(context)
+    if mode == "system":
+        return target_language(user)
+    if mode == "custom":
+        return context.user_data.get("translate_lang") or target_language(user)
+    return None
 
 
 def translation_block(user: User, translation: str, lang: str) -> str:
-    return f"{tr(user, 'translation_header', lang=lang)}\n{translation}"
+    name = language_name(lang, user.language_code)
+    return f"{tr(user, 'translation_header', lang=name)}\n{translation}"
 
 
 def with_translation(original: str, block: str) -> str:
@@ -82,45 +106,144 @@ def translate_existing(transcript_id: str, lang: str) -> str | None:
     return (response.translated_texts or {}).get(lang)
 
 
-def settings_keyboard(user: User, enabled: bool) -> InlineKeyboardMarkup:
-    on = ("✅ " if enabled else "") + tr(user, "translate_on")
-    off = ("" if enabled else "✅ ") + tr(user, "translate_off")
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(on, callback_data="settings:on"),
-                InlineKeyboardButton(off, callback_data="settings:off"),
-            ]
-        ]
+def reply_keyboard(user: User) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[tr(user, "settings_button")]], resize_keyboard=True, is_persistent=True
     )
 
 
-def settings_text(user: User) -> str:
-    return tr(user, "settings", lang=target_language(user))
+def settings_text(user: User, context: CallbackContext) -> str:
+    mode = translation_mode(context)
+    if mode == "system":
+        status = tr(user, "status_system", lang=language_name(target_language(user), user.language_code))
+    elif mode == "custom":
+        status = tr(user, "status_custom", lang=custom_language_name(user, context))
+    else:
+        status = tr(user, "status_off")
+    return f"{tr(user, 'settings_title')}\n\n{status}"
+
+
+def custom_language_name(user: User, context: CallbackContext) -> str:
+    code = context.user_data.get("translate_lang") or target_language(user)
+    return language_name(code, user.language_code)
+
+
+def settings_keyboard(user: User) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(tr(user, "translate_menu_button"), callback_data="menu:translate")]]
+    )
+
+
+def translate_menu_keyboard(user: User, context: CallbackContext) -> InlineKeyboardMarkup:
+    mode = translation_mode(context)
+    system = tr(user, "mode_system", lang=language_name(target_language(user), user.language_code))
+    if mode == "custom":
+        custom = tr(user, "mode_custom_selected", lang=custom_language_name(user, context))
+    else:
+        custom = tr(user, "mode_custom")
+    off = tr(user, "mode_off")
+    rows = [
+        [("✅ " if mode == "system" else "") + system, "tmode:system"],
+        [("✅ " if mode == "custom" else "") + custom, "tmode:custom"],
+        [("✅ " if mode == "off" else "") + off, "tmode:off"],
+        [tr(user, "back"), "menu:main"],
+    ]
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(text, callback_data=data)] for text, data in rows]
+    )
+
+
+async def reply_settings(message, user: User, context: CallbackContext) -> None:
+    await message.reply_text(
+        settings_text(user, context), reply_markup=settings_keyboard(user)
+    )
+
+
+async def show_main(query, user: User, context: CallbackContext) -> None:
+    await query.edit_message_text(
+        settings_text(user, context), reply_markup=settings_keyboard(user)
+    )
 
 
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.effective_user
-    await update.message.reply_text(tr(user, "start", name=user.first_name))
-
-
-async def settings(update: Update, context: CallbackContext) -> None:
-    user = update.effective_user
     await update.message.reply_text(
-        settings_text(user),
-        reply_markup=settings_keyboard(user, translate_enabled(context)),
+        tr(user, "start", name=user.first_name), reply_markup=reply_keyboard(user)
     )
 
 
-async def handle_settings(update: Update, context: CallbackContext) -> None:
+async def settings(update: Update, context: CallbackContext) -> None:
+    context.user_data["awaiting_language"] = False
+    await reply_settings(update.message, update.effective_user, context)
+
+
+async def handle_menu(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     user = query.from_user
-    enabled = query.data == "settings:on"
-    context.user_data["translate"] = enabled
-    await query.answer(tr(user, "translate_enabled" if enabled else "translate_disabled"))
-    keyboard = settings_keyboard(user, enabled)
-    if query.message.reply_markup != keyboard:
-        await query.edit_message_text(settings_text(user), reply_markup=keyboard)
+    await query.answer()
+    if query.data == "menu:translate":
+        await query.edit_message_text(
+            tr(user, "translate_menu_title"),
+            reply_markup=translate_menu_keyboard(user, context),
+        )
+    else:
+        context.user_data["awaiting_language"] = False
+        await show_main(query, user, context)
+
+
+async def handle_mode(update: Update, context: CallbackContext) -> None:
+    await apply_mode(update.callback_query, context, update.callback_query.data.removeprefix("tmode:"))
+
+
+async def apply_mode(query, context: CallbackContext, mode: str) -> None:
+    user = query.from_user
+    if mode == "custom":
+        context.user_data["awaiting_language"] = True
+        await query.answer()
+        await query.edit_message_text(
+            tr(user, "ask_language"),
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton(tr(user, "cancel"), callback_data="menu:main")]]
+            ),
+        )
+        return
+
+    context.user_data["translate_mode"] = mode
+    context.user_data["awaiting_language"] = False
+    await query.answer(tr(user, "mode_saved"))
+    await show_main(query, user, context)
+
+
+async def handle_legacy_settings(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await apply_mode(query, context, "system" if query.data == "settings:on" else "off")
+
+
+async def handle_text(update: Update, context: CallbackContext) -> None:
+    message = update.message
+    user = update.effective_user
+    text = message.text or ""
+
+    if text.strip() in SETTINGS_BUTTONS:
+        context.user_data["awaiting_language"] = False
+        await reply_settings(message, user, context)
+        return
+
+    if context.user_data.get("awaiting_language"):
+        code = resolve_language(text)
+        if not code:
+            await message.reply_text(tr(user, "language_unknown"))
+            return
+        context.user_data["translate_mode"] = "custom"
+        context.user_data["translate_lang"] = code
+        context.user_data["awaiting_language"] = False
+        await message.reply_text(
+            tr(user, "language_set", lang=language_name(code, user.language_code))
+        )
+        await reply_settings(message, user, context)
+        return
+
+    await message.reply_text(tr(user, "hint"), reply_markup=reply_keyboard(user))
 
 
 async def handle_voice(update: Update, context: CallbackContext) -> None:
@@ -130,11 +253,9 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
         media = message.voice or message.audio
         new_file = await context.bot.get_file(media.file_id)
 
-        lang = target_language(user)
-        auto_translate = translate_enabled(context)
-        transcript = await asyncio.to_thread(
-            transcribe, new_file.file_path, lang if auto_translate else None
-        )
+        target = translation_target(user, context)
+        lang = target or target_language(user)
+        transcript = await asyncio.to_thread(transcribe, new_file.file_path, target)
 
         if not transcript.text:
             await message.reply_text(tr(user, "no_speech"))
@@ -143,7 +264,7 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
         detected = transcript.language_code
         foreign = bool(detected) and base_language(detected) != lang
 
-        if auto_translate and foreign:
+        if target and foreign:
             translation = (transcript.translated_texts or {}).get(lang)
             if translation:
                 block = translation_block(user, translation, lang)
@@ -162,7 +283,7 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
                     [
                         InlineKeyboardButton(
                             tr(user, "translate_button"),
-                            callback_data=f"tr:{transcript.id}",
+                            callback_data=f"tr:{lang}:{transcript.id}",
                         )
                     ]
                 ]
@@ -177,8 +298,8 @@ async def handle_voice(update: Update, context: CallbackContext) -> None:
 async def handle_translate(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
     user = query.from_user
-    transcript_id = query.data.removeprefix("tr:")
-    lang = target_language(user)
+    lang, _, transcript_id = query.data.removeprefix("tr:").rpartition(":")
+    lang = lang or target_language(user)
 
     try:
         translation = await asyncio.to_thread(translate_existing, transcript_id, lang)
@@ -230,10 +351,17 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("settings", settings))
+    app.add_handler(CallbackQueryHandler(handle_menu, pattern=r"^menu:(main|translate)$"))
+    app.add_handler(CallbackQueryHandler(handle_mode, pattern=r"^tmode:(system|custom|off)$"))
     app.add_handler(
-        CallbackQueryHandler(handle_settings, pattern=r"^settings:(on|off)$")
+        CallbackQueryHandler(handle_legacy_settings, pattern=r"^settings:(on|off)$")
     )
     app.add_handler(CallbackQueryHandler(handle_translate, pattern=r"^tr:", block=False))
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, handle_text
+        )
+    )
     app.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & (filters.VOICE | filters.AUDIO),

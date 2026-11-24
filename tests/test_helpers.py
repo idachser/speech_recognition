@@ -21,19 +21,44 @@ def test_target_language_uses_telegram_language():
     assert bot.target_language(make_user(None)) == "en"
 
 
-def test_translate_enabled_defaults_to_false():
-    assert bot.translate_enabled(SimpleNamespace(user_data={})) is False
-    assert bot.translate_enabled(SimpleNamespace(user_data={"translate": True})) is True
+def ctx(**data):
+    return SimpleNamespace(user_data=dict(data))
+
+
+def test_translation_mode_defaults_to_off():
+    assert bot.translation_mode(ctx()) == "off"
+
+
+@pytest.mark.parametrize(
+    "data, expected",
+    [
+        ({"translate": True}, "system"),
+        ({"translate": False}, "off"),
+        ({"translate_mode": "custom", "translate": True}, "custom"),
+        ({"translate_mode": "off", "translate": True}, "off"),
+        ({"translate_mode": "bogus"}, "off"),
+    ],
+)
+def test_translation_mode_migrates_old_flag(data, expected):
+    assert bot.translation_mode(ctx(**data)) == expected
+
+
+def test_translation_target():
+    user = make_user("de")
+    assert bot.translation_target(user, ctx()) is None
+    assert bot.translation_target(user, ctx(translate_mode="system")) == "de"
+    assert bot.translation_target(user, ctx(translate_mode="custom", translate_lang="es")) == "es"
+    assert bot.translation_target(user, ctx(translate="x", translate_mode="custom")) == "de"
 
 
 def test_with_translation_format():
     block = bot.translation_block(make_user("ru"), "привет", "ru")
-    assert block == "🌐 Перевод (ru):\nпривет"
-    assert bot.with_translation("hi", block) == "hi\n\n🌐 Перевод (ru):\nпривет"
+    assert block == "🌐 Перевод (русский):\nпривет"
+    assert bot.with_translation("hi", block) == "hi\n\n🌐 Перевод (русский):\nпривет"
 
 
 def test_translation_header_follows_ui_language():
-    assert bot.translation_block(make_user("en"), "hi", "en") == "🌐 Translation (en):\nhi"
+    assert bot.translation_block(make_user("en"), "hi", "en") == "🌐 Translation (English):\nhi"
 
 
 def test_chunks_respects_telegram_limit():
@@ -53,16 +78,60 @@ async def test_reply_long_puts_markup_on_last_part_only():
     assert calls[1].kwargs["reply_markup"] is markup
 
 
-def test_settings_keyboard_marks_current_choice():
-    on, off = bot.settings_keyboard(make_user("ru"), True).inline_keyboard[0]
-    assert (on.text, off.text) == ("✅ Переводить", "Не переводить")
-    assert (on.callback_data, off.callback_data) == ("settings:on", "settings:off")
+def buttons(markup):
+    return [(b.text, b.callback_data) for row in markup.inline_keyboard for b in row]
 
-    on, off = bot.settings_keyboard(make_user("ru"), False).inline_keyboard[0]
-    assert (on.text, off.text) == ("Переводить", "✅ Не переводить")
 
-    on, off = bot.settings_keyboard(make_user("en"), True).inline_keyboard[0]
-    assert (on.text, off.text) == ("✅ Translate", "Don't translate")
+def test_settings_keyboard_opens_translate_menu():
+    assert buttons(bot.settings_keyboard(make_user("ru"))) == [("🌐 Перевод", "menu:translate")]
+
+
+@pytest.mark.parametrize(
+    "data, checked",
+    [
+        ({}, "tmode:off"),
+        ({"translate_mode": "system"}, "tmode:system"),
+        ({"translate_mode": "custom", "translate_lang": "de"}, "tmode:custom"),
+    ],
+)
+def test_translate_menu_marks_current_mode(data, checked):
+    markup = bot.translate_menu_keyboard(make_user("ru"), ctx(**data))
+    assert all(len(row) == 1 for row in markup.inline_keyboard)
+    marked = [d for text, d in buttons(markup) if text.startswith("✅ ")]
+    assert marked == [checked]
+    assert buttons(markup)[-1] == ("« Назад", "menu:main")
+
+
+def test_translate_menu_texts():
+    markup = bot.translate_menu_keyboard(
+        make_user("ru"), ctx(translate_mode="custom", translate_lang="de")
+    )
+    assert buttons(markup) == [
+        ("На язык системы (русский)", "tmode:system"),
+        ("✅ На немецкий…", "tmode:custom"),
+        ("Не переводить", "tmode:off"),
+        ("« Назад", "menu:main"),
+    ]
+    markup = bot.translate_menu_keyboard(make_user("ru"), ctx())
+    assert buttons(markup)[1] == ("На другой язык…", "tmode:custom")
+
+
+def test_settings_text_shows_status():
+    user = make_user("ru")
+    assert bot.settings_text(user, ctx()) == "Настройки\n\nПеревод: выключен"
+    assert bot.settings_text(user, ctx(translate_mode="system")).endswith(
+        "Перевод: на язык системы (русский)"
+    )
+    assert bot.settings_text(user, ctx(translate_mode="custom", translate_lang="de")).endswith(
+        "Перевод: на немецкий"
+    )
+
+
+def test_reply_keyboard_is_persistent_settings_button():
+    markup = bot.reply_keyboard(make_user("en"))
+    assert markup.keyboard[0][0].text == "⚙️ Settings"
+    assert markup.is_persistent is True
+    assert markup.resize_keyboard is True
 
 
 class FakeTranscriber:

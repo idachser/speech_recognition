@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-COPY bot.py i18n.py ./
+COPY bot.py i18n.py languages.py ./
 
 # bot.py writes bot_data.pickle and enotebot.log to the working directory,
 # so running from /data keeps them on the mounted volume.

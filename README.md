@@ -1,7 +1,7 @@
 Telegram Bot for voice messages to text recognition
 
 - Recognizes voice and audio messages in any language (AssemblyAI language detection).
-- Translates transcripts into the language of the user's Telegram interface: always (toggle in `/settings`) or on demand with the "Перевести" button under a transcript.
+- Translates transcripts automatically or on demand with the "Перевести" button under a transcript. The "⚙️ Настройки" button under the input field (or `/settings`) opens the menu: translate into the Telegram interface language, into another language (just write its name, e.g. "немецкий", "Deutsch" or "de"), or don't translate.
 
 Local setup: `pip install -r requirements.txt`, set `TELEGRAM_API_TOKEN` and `ASSEMBLYAI_API_KEY` in the dotenv file, run `python bot.py`. User settings are stored in `bot_data.pickle`. Tests: `pip install -r requirements-dev.txt && pytest`.
 
