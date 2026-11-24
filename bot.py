@@ -328,15 +328,38 @@ def bot_commands(code: str | None) -> list[BotCommand]:
     ]
 
 
+COMMANDS_ATTEMPTS = 5
+COMMANDS_RETRY_DELAY = 60
+
+_background_tasks: set[asyncio.Task] = set()
+
+
+async def publish_commands(bot) -> None:
+    await bot.set_my_commands(bot_commands("en"))
+    for lang in TEXTS:
+        await bot.set_my_commands(bot_commands(lang), language_code=lang)
+
+
+async def set_commands_with_retry(
+    bot, attempts: int = COMMANDS_ATTEMPTS, delay: float = COMMANDS_RETRY_DELAY
+) -> bool:
+    for attempt in range(1, attempts + 1):
+        try:
+            await publish_commands(bot)
+            return True
+        except TelegramError as e:
+            logger.warning(f"Could not set bot commands (attempt {attempt}/{attempts}): {e}")
+            if attempt < attempts:
+                await asyncio.sleep(delay)
+    return False
+
+
 async def set_commands(app: Application) -> None:
-    # post_init runs outside the bootstrap retry loop, so a failure here would
-    # crash the bot; the command menu is cosmetic and must not.
-    try:
-        await app.bot.set_my_commands(bot_commands("en"))
-        for lang in TEXTS:
-            await app.bot.set_my_commands(bot_commands(lang), language_code=lang)
-    except TelegramError as e:
-        logger.warning(f"Could not set bot commands: {e}")
+    # post_init runs outside the bootstrap retry loop, so it must neither raise
+    # nor block startup; the command menu is cosmetic and is retried in the background.
+    task = asyncio.create_task(set_commands_with_retry(app.bot))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def main() -> None:
@@ -345,6 +368,10 @@ def main() -> None:
         Application.builder()
         .token(telegram_token)
         .persistence(persistence)
+        .connect_timeout(10)
+        .read_timeout(20)
+        .write_timeout(20)
+        .get_updates_connect_timeout(10)
         .post_init(set_commands)
         .build()
     )

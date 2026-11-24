@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -55,17 +56,49 @@ def test_bot_commands_are_localized():
     ]
 
 
-async def test_set_commands_registers_default_and_each_language():
+def fake_bot(set_my_commands):
+    return type("Bot", (), {"set_my_commands": set_my_commands})()
+
+
+async def test_publish_commands_registers_default_and_each_language():
     set_my_commands = AsyncMock()
-    app = type("App", (), {"bot": type("Bot", (), {"set_my_commands": set_my_commands})()})()
-    await bot.set_commands(app)
+    await bot.publish_commands(fake_bot(set_my_commands))
 
     calls = set_my_commands.await_args_list
     assert calls[0].kwargs == {}
     assert [c.kwargs["language_code"] for c in calls[1:]] == list(i18n.TEXTS)
 
 
-async def test_set_commands_failure_does_not_crash():
-    set_my_commands = AsyncMock(side_effect=TelegramError("Too Many Requests"))
-    app = type("App", (), {"bot": type("Bot", (), {"set_my_commands": set_my_commands})()})()
+async def test_set_commands_retries_until_success(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr(bot.asyncio, "sleep", sleep)
+    publish = AsyncMock(side_effect=[TelegramError("Timed out"), TelegramError("Timed out"), None])
+    monkeypatch.setattr(bot, "publish_commands", publish)
+
+    assert await bot.set_commands_with_retry(object(), attempts=5, delay=7) is True
+    assert publish.await_count == 3
+    assert [c.args for c in sleep.await_args_list] == [(7,), (7,)]
+
+
+async def test_set_commands_gives_up_without_raising(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr(bot.asyncio, "sleep", sleep)
+    publish = AsyncMock(side_effect=TelegramError("Too Many Requests"))
+    monkeypatch.setattr(bot, "publish_commands", publish)
+
+    assert await bot.set_commands_with_retry(object(), attempts=3, delay=1) is False
+    assert publish.await_count == 3
+    assert sleep.await_count == 2
+
+
+async def test_set_commands_runs_in_background(monkeypatch):
+    publish = AsyncMock()
+    monkeypatch.setattr(bot, "publish_commands", publish)
+    app = type("App", (), {"bot": object()})()
+
     await bot.set_commands(app)
+    assert len(bot._background_tasks) == 1
+    await asyncio.gather(*bot._background_tasks)
+
+    publish.assert_awaited_once()
+    assert not bot._background_tasks
